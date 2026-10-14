@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AgriAI Crop Scanner</title>
+
+<style>
+* { box-sizing: border-box; }
+
+body {
+    margin: 0;
+    font-family: Arial, sans-serif;
+    background: #f1f8f1;
+    color: #183b24;
+}
+
+header {
+    background: #147d3f;
+    color: white;
+    padding: 20px;
+    text-align: center;
+}
+
+main {
+    max-width: 650px;
+    margin: 24px auto;
+    padding: 20px;
+    background: white;
+    border-radius: 16px;
+    box-shadow: 0 5px 20px #0001;
+}
+
+button, .upload-label {
+    display: block;
+    width: 100%;
+    padding: 14px;
+    margin-top: 12px;
+    border: none;
+    border-radius: 9px;
+    font-size: 16px;
+    font-weight: bold;
+    text-align: center;
+    cursor: pointer;
+}
+
+button {
+    background: #168544;
+    color: white;
+}
+
+button:disabled {
+    opacity: 0.6;
+    cursor: wait;
+}
+
+.upload-label {
+    background: #e5f5e9;
+    color: #176b37;
+}
+
+#camera, #preview {
+    width: 100%;
+    max-height: 380px;
+    object-fit: contain;
+    margin-top: 15px;
+    border-radius: 12px;
+    background: #edf0ed;
+}
+
+#camera, #preview, #captureBtn, #retakeBtn {
+    display: none;
+}
+
+#result {
+    margin-top: 20px;
+    padding: 15px;
+    background: #edf8ef;
+    border-radius: 10px;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    line-height: 1.7;
+}
+
+#status {
+    color: #167d3e;
+}
+
+input[type="file"] {
+    display: none;
+}
+</style>
+</head>
+
+<body>
+<header>
+    <h1>🌱 AgriAI</h1>
+    <p>Capture. Analyze. Grow Better.</p>
+</header>
+
+<main>
+    <h2>Crop Disease Scanner</h2>
+    <p>Capture a crop photo or upload an existing image.</p>
+
+    <button type="button" id="openCameraBtn">
+        📷 Open Camera
+    </button>
+
+    <video id="camera" autoplay playsinline></video>
+
+    <button type="button" id="captureBtn">
+        📸 Capture Photo
+    </button>
+
+    <button type="button" id="retakeBtn">
+        🔄 Retake Photo
+    </button>
+
+    <canvas id="canvas" hidden></canvas>
+
+    <label class="upload-label" for="photoInput">
+        🖼️ Upload Photo from Gallery
+    </label>
+
+    <input
+        type="file"
+        id="photoInput"
+        accept="image/jpeg,image/png,image/webp"
+    >
+
+    <img id="preview" alt="Crop photo preview">
+
+    <button type="button" id="analyzeBtn">
+        🤖 Analyze Crop
+    </button>
+
+    <p id="status" aria-live="polite"></p>
+    <div id="result" hidden></div>
+</main>
+
+<script>
+const camera = document.getElementById("camera");
+const canvas = document.getElementById("canvas");
+const preview = document.getElementById("preview");
+const photoInput = document.getElementById("photoInput");
+
+const openCameraBtn = document.getElementById("openCameraBtn");
+const captureBtn = document.getElementById("captureBtn");
+const retakeBtn = document.getElementById("retakeBtn");
+const analyzeBtn = document.getElementById("analyzeBtn");
+
+const statusText = document.getElementById("status");
+const result = document.getElementById("result");
+
+let stream = null;
+let selectedPhoto = null;
+let previewURL = null;
+
+function stopCamera() {
+    if (stream) {
+        stream.getTracks().forEach(track => track.stop());
+        stream = null;
+    }
+    camera.srcObject = null;
+}
+
+function showPhoto(file) {
+    if (!file) return;
+
+    if (!["image/jpeg", "image/png", "image/webp"]
+        .includes(file.type)) {
+        alert("Please select a JPG, PNG, or WEBP image.");
+        return;
+    }
+
+    if (file.size > 10 * 1024 * 1024) {
+        alert("Photo must be smaller than 10 MB.");
+        return;
+    }
+
+    stopCamera();
+
+    selectedPhoto = file;
+
+    if (previewURL) URL.revokeObjectURL(previewURL);
+    previewURL = URL.createObjectURL(file);
+    preview.src = previewURL;
+    preview.style.display = "block";
+
+    camera.style.display = "none";
+    captureBtn.style.display = "none";
+    retakeBtn.style.display = "none";
+    openCameraBtn.style.display = "block";
+
+    result.hidden = true;
+    statusText.textContent = "Photo ready for analysis.";
+}
+
+async function openCamera() {
+    try {
+        if (!navigator.mediaDevices?.getUserMedia) {
+            throw new Error(
+                "Camera needs HTTPS or localhost. Open this app through Flask."
+            );
+        }
+
+        stopCamera();
+
+        stream = await navigator.mediaDevices.getUserMedia({
+            audio: false,
+            video: { facingMode: { ideal: "environment" } }
+        });
+
+        camera.srcObject = stream;
+        await camera.play();
+
+        camera.style.display = "block";
+        preview.style.display = "none";
+        openCameraBtn.style.display = "none";
+        captureBtn.style.display = "block";
+        retakeBtn.style.display = "none";
+
+        selectedPhoto = null;
+        photoInput.value = "";
+        result.hidden = true;
+
+        statusText.textContent =
+            "Camera opened. Point it at your crop.";
+
+    } catch (error) {
+        statusText.textContent =
+            "Camera error: " + error.message +
+            " Please allow camera access.";
+    }
+}
+
+openCameraBtn.addEventListener("click", openCamera);
+
+captureBtn.addEventListener("click", () => {
+    if (!camera.videoWidth) {
+        statusText.textContent = "Please wait for the camera.";
+        return;
+    }
+
+    canvas.width = camera.videoWidth;
+    canvas.height = camera.videoHeight;
+
+    canvas.getContext("2d").drawImage(
+        camera, 0, 0, canvas.width, canvas.height
+    );
+
+    canvas.toBlob(blob => {
+        if (!blob) {
+            statusText.textContent = "Could not capture photo.";
+            return;
+        }
+
+        showPhoto(new File([blob], "crop.jpg", {
+            type: "image/jpeg"
+        }));
+
+        retakeBtn.style.display = "block";
+        statusText.textContent = "Photo captured successfully.";
+    }, "image/jpeg", 0.9);
+});
+
+retakeBtn.addEventListener("click", openCamera);
+
+photoInput.addEventListener("change", () => {
+    showPhoto(photoInput.files[0]);
+});
+
+analyzeBtn.addEventListener("click", async () => {
+    if (!selectedPhoto) {
+        alert("Please capture or upload a crop photo first.");
+        return;
+    }
+
+    const formData = new FormData();
+    formData.append("photo", selectedPhoto);
+
+    analyzeBtn.disabled = true;
+    analyzeBtn.textContent = "Analyzing...";
+    statusText.textContent = "AI is analyzing your crop...";
+    result.hidden = false;
+    result.textContent = "";
+
+    try {
+        const response = await fetch("/analyze", {
+            method: "POST",
+            body: formData
+        });
+
+        const data = await response.json();
+
+        if (!response.ok) {
+            throw new Error(data.error || "Analysis failed.");
+        }
+
+        result.textContent = data.details;
+        statusText.textContent = "Analysis completed.";
+
+    } catch (error) {
+        statusText.textContent = "Unable to analyze crop.";
+        result.textContent = error.message;
+    } finally {
+        analyzeBtn.disabled = false;
+        analyzeBtn.textContent = "🤖 Analyze Crop";
+    }
+});
+
+window.addEventListener("pagehide", stopCamera);
+</script>
+</body>
+</html>
